@@ -23,11 +23,12 @@ const Bullets = (function () {
      * @param {Object} utilsModule - Moduł z funkcjami pomocniczymi
      * @param {Object} playerModule - Moduł gracza
      */
-    function init(canvasElement, context, utilsModule, playerModule) {
+    function init(canvasElement, context, utilsModule, playerModule, keysObject) {
         canvas = canvasElement;
         ctx = context;
         utils = utilsModule;
         player = playerModule;
+        keys = keysObject;
     }
 
     /**
@@ -74,7 +75,7 @@ const Bullets = (function () {
      * i minął już cooldown od poprzedniego strzału.
      * @param {Object} keys - Obiekt ze stanem klawiszy
      */
-    function handleShooting(keys) {
+    function handleShooting() {
         if (shootCooldown > 0) {
             shootCooldown--;
         }

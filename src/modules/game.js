@@ -51,7 +51,7 @@ const Game = (function () {
         enemy.init(canvas, ctx, utils);
 
         bullets = Bullets;
-        bullets.init(canvas, ctx, utils, player);
+        bullets.init(canvas, ctx, utils, player, keys);
 
         ui = UI;
         ui.init(canvas, ctx);
@@ -117,7 +117,7 @@ const Game = (function () {
             // --- Aktualizacja logiki gry ---
             frameCount++;
             player.update();
-            bullets.handleShooting(keys);
+            bullets.handleShooting();
             bullets.update();
 
             // Spawn wrogów zgodnie z aktualnym spawn rate
