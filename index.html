@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kosmiczna Strzelanka</title>
+    <style>
+        /* ============================================================
+           STYLE – wyśrodkowanie canvasa i ciemne tło kosmosu
+           ============================================================ */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #0a0a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Courier New', monospace;
+        }
+
+        canvas {
+            border: 2px solid #00ccff;
+            box-shadow: 0 0 30px rgba(0, 204, 255, 0.3);
+            display: block;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ============================================================
+         GŁÓWNY OBSZAR GRY
+         ============================================================ -->
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // ============================================================
+        // POBRANIE KONTEKSTU CANVAS
+        // ============================================================
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Wymiary canvasa – stałe, niezmienne w trakcie gry
+        canvas.width = 500;
+        canvas.height = 700;
+
+        // ============================================================
+        // ZMIENNE GLOBALNE STANU GRY
+        // ============================================================
+        let gameRunning = true;          // czy gra aktywna (nie Game Over)
+        let score = 0;                   // wynik gracza
+        let difficultyTimer = 0;         // licznik klatek do zwiększania trudności
+        const DIFFICULTY_INTERVAL = 300; // co ile klatek rośnie trudność (~5s przy 60fps)
+        let enemySpawnRate = 60;         // co ile klatek pojawia się nowy wróg (maleje z czasem)
+        let frameCount = 0;              // globalny licznik klatek
+
+        // ============================================================
+        // OBIEKT GRACZA (STATEK)
+        // ============================================================
+        const player = {
+            x: canvas.width / 2,         // pozycja startowa: środek u góry
+            y: canvas.height - 80,       // blisko dołu ekranu
+            width: 40,                   // szerokość statku
+            height: 50,                  // wysokość statku
+            speed: 7,                    // prędkość ruchu w pikselach/klatkę
+            color: '#00ccff'             // kolor statku (cyjan)
+        };
+
+        // ============================================================
+        // TABLICE NA POCISKI I WROGÓW
+        // ============================================================
+        let bullets = [];   // każdy pocisk to { x, y, width, height, speed }
+        let enemies = [];   // każdy wróg to  { x, y, width, height, speed, color }
+
+        // ============================================================
+        // STEROWANIE – śledzenie wciśniętych klawiszy
+        // ============================================================
+        const keys = {
+            ArrowLeft: false,
+            ArrowRight: false,
+            KeyA: false,
+            KeyD: false,
+            Space: false
+        };
+
+        // Nasłuchiwanie na keydown – ustaw flagę na true
+        document.addEventListener('keydown', (e) => {
+            // Zapobiegamy przewijaniu strony spacją i strzałkami
+            if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'ArrowDown' ||
+                e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+                e.preventDefault();
+            }
+
+            // Restart gry klawiszem R – tylko gdy gra jest zakończona
+            if (e.code === 'KeyR' && !gameRunning) {
+                restartGame();
+                return;
+            }
+
+            // Zapisujemy stan klawisza
+            if (e.code in keys) {
+                keys[e.code] = true;
+            }
+        });
+
+        // Nasłuchiwanie na keyup – ustaw flagę na false
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'ArrowDown' ||
+                e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+                e.preventDefault();
+            }
+
+            if (e.code in keys) {
+                keys[e.code] = false;
+            }
+        });
+
+        // ============================================================
+        // FUNKCJE POMOCNICZE
+        // ============================================================
+
+        /**
+         * Sprawdza kolizję między dwoma prostokątami (AABB – Axis-Aligned Bounding Box).
+         * Zwraca true, jeśli prostokąty nachodzą na siebie.
+         */
+        function checkCollision(a, b) {
+            return (
+                a.x < b.x + b.width &&
+                a.x + a.width > b.x &&
+                a.y < b.y + b.height &&
+                a.y + a.height > b.y
+            );
+        }
+
+        /**
+         * Generuje losową liczbę całkowitą z przedziału [min, max].
+         */
+        function randomInt(min, max) {
+            return Math.floor(Math.random() * (max - min + 1)) + min;
+        }
+
+        // ============================================================
+        // SEKCJA: POCISKI
+        // ============================================================
+
+        /**
+         * Tworzy nowy pocisk wystrzelony ze środka statku gracza.
+         * Pociski lecą do góry (ujemny speed.y).
+         */
+        function spawnBullet() {
+            bullets.push({
+                x: player.x + player.width / 2 - 3,  // środek statku, minus połowa szerokości pocisku
+                y: player.y,                          // od górnej krawędzi statku
+                width: 6,
+                height: 14,
+                speed: 10                             // prędkość w pikselach/klatkę (do góry)
+            });
+        }
+
+        /**
+         * Aktualizuje pozycję wszystkich pocisków.
+         * Usuwa te, które wyleciały poza górną krawędź ekranu.
+         */
+        function updateBullets() {
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                bullets[i].y -= bullets[i].speed;
+
+                // Usuń pocisk, jeśli wyleciał poza ekran
+                if (bullets[i].y + bullets[i].height < 0) {
+                    bullets.splice(i, 1);
+                }
+            }
+        }
+
+        /**
+         * Rysuje wszystkie pociski jako małe, jasne prostokąty.
+         */
+        function drawBullets() {
+            ctx.fillStyle = '#ffff00';   // żółty kolor pocisków
+            for (const bullet of bullets) {
+                ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+            }
+        }
+
+        // ============================================================
+        // SEKCJA: WROGOWIE
+        // ============================================================
+
+        /**
+         * Tworzy nowego wroga na losowej pozycji X u góry ekranu.
+         * Kolor jest losowy spośród kilku neonowych odcieni.
+         */
+        function spawnEnemy() {
+            const enemyWidth = 35;
+            const enemyHeight = 35;
+            const colors = ['#ff3366', '#ff6633', '#ffcc00', '#ff33cc', '#33ff66', '#ff6600'];
+
+            enemies.push({
+                x: randomInt(0, canvas.width - enemyWidth),
+                y: -enemyHeight,                           // start powyżej ekranu
+                width: enemyWidth,
+                height: enemyHeight,
+                speed: randomInt(2, 5),                     // losowa prędkość opadania
+                color: colors[randomInt(0, colors.length - 1)]
+            });
+        }
+
+        /**
+         * Aktualizuje pozycję wszystkich wrogów (lecą w dół).
+         * Jeśli wróg dotknie gracza → Game Over.
+         * Jeśli wróg wyleci poza dół ekranu → usuwamy go (bez kary).
+         */
+        function updateEnemies() {
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                enemies[i].y += enemies[i].speed;
+
+                // Sprawdź kolizję wroga z graczem
+                if (checkCollision(enemies[i], player)) {
+                    gameRunning = false;   // koniec gry
+                    return;                // natychmiast przerwij aktualizację
+                }
+
+                // Usuń wroga, który wyleciał poza dół ekranu
+                if (enemies[i].y > canvas.height + 50) {
+                    enemies.splice(i, 1);
+                }
+            }
+        }
+
+        /**
+         * Rysuje wszystkich wrogów jako kolorowe prostokąty z dodatkowym
+         * mniejszym prostokątem wewnątrz (efekt „oka” wroga).
+         */
+        function drawEnemies() {
+            for (const enemy of enemies) {
+                // Główny korpus wroga
+                ctx.fillStyle = enemy.color;
+                ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+
+                // Wewnętrzny detal – ciemniejszy rdzeń (oko)
+                ctx.fillStyle = '#111122';
+                ctx.fillRect(
+                    enemy.x + enemy.width * 0.25,
+                    enemy.y + enemy.height * 0.25,
+                    enemy.width * 0.5,
+                    enemy.height * 0.5
+                );
+
+                // Poświata wokół wroga (dla efektu neon)
+                ctx.strokeStyle = enemy.color;
+                ctx.lineWidth = 2;
+                ctx.globalAlpha = 0.5;
+                ctx.strokeRect(enemy.x - 2, enemy.y - 2, enemy.width + 4, enemy.height + 4);
+                ctx.globalAlpha = 1.0;
+                ctx.lineWidth = 1;
+            }
+        }
+
+        // ============================================================
+        // SEKCJA: GRACZ (STATEK)
+        // ============================================================
+
+        /**
+         * Aktualizuje pozycję statku na podstawie wciśniętych klawiszy.
+         * Statek nie może wyjechać poza krawędzie ekranu.
+         */
+        function updatePlayer() {
+            // Ruch w lewo: strzałka w lewo LUB klawisz A
+            if (keys.ArrowLeft || keys.KeyA) {
+                player.x -= player.speed;
+            }
+            // Ruch w prawo: strzałka w prawo LUB klawisz D
+            if (keys.ArrowRight || keys.KeyD) {
+                player.x += player.speed;
+            }
+
+            // Ograniczenie pozycji – statek nie może wyjechać poza canvas
+            if (player.x < 0) player.x = 0;
+            if (player.x + player.width > canvas.width) player.x = canvas.width - player.width;
+        }
+
+        /**
+         * Rysuje statek gracza jako kształt złożony z kilku prostokątów
+         * (kadłub, skrzydła, kokpit) – wszystko zbudowane z prostych figur.
+         */
+        function drawPlayer() {
+            const { x, y, width, height, color } = player;
+
+            // --- Kadłub (główny korpus) ---
+            ctx.fillStyle = color;
+            ctx.fillRect(x + width * 0.3, y, width * 0.4, height * 0.7);
+
+            // --- Skrzydła (lewe i prawe) ---
+            ctx.fillStyle = '#0099cc';
+            // Lewe skrzydło (trapez z prostokątów)
+            ctx.fillRect(x, y + height * 0.2, width * 0.3, height * 0.35);
+            // Prawe skrzydło
+            ctx.fillRect(x + width * 0.7, y + height * 0.2, width * 0.3, height * 0.35);
+
+            // --- Działko (wystający element u góry kadłuba) ---
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(x + width * 0.42, y - 8, width * 0.16, 12);
+
+            // --- Kokpit (mały jasny prostokąt) ---
+            ctx.fillStyle = '#aaffff';
+            ctx.fillRect(x + width * 0.35, y + height * 0.1, width * 0.3, height * 0.2);
+
+            // --- Silnik (dolna część) ---
+            ctx.fillStyle = '#ff6600';
+            ctx.fillRect(x + width * 0.25, y + height * 0.7, width * 0.5, height * 0.3);
+
+            // --- Płomień z silnika (efekt animacji) ---
+            const flameHeight = 8 + Math.sin(frameCount * 0.5) * 4;  // pulsujący płomień
+            ctx.fillStyle = '#ffaa00';
+            ctx.fillRect(x + width * 0.3, y + height, width * 0.4, flameHeight);
+            ctx.fillStyle = '#ffff00';
+            ctx.fillRect(x + width * 0.35, y + height, width * 0.3, flameHeight * 0.6);
+        }
+
+        // ============================================================
+        // SEKCJA: KOLIZJE POCISKÓW Z WROGAMI
+        // ============================================================
+
+        /**
+         * Sprawdza kolizję każdego pocisku z każdym wrogiem.
+         * Przy trafieniu: usuwa zarówno pocisk, jak i wroga,
+         * oraz zwiększa wynik gracza.
+         */
+        function handleBulletEnemyCollisions() {
+            for (let b = bullets.length - 1; b >= 0; b--) {
+                let bulletHit = false;
+
+                for (let e = enemies.length - 1; e >= 0; e--) {
+                    if (checkCollision(bullets[b], enemies[e])) {
+                        // Trafienie! Usuń wroga i oznacz pocisk do usunięcia
+                        enemies.splice(e, 1);
+                        bulletHit = true;
+                        score += 10;   // +10 punktów za każdego zniszczonego wroga
+                        break;         // jeden pocisk niszczy tylko jednego wroga
+                    }
+                }
+
+                if (bulletHit) {
+                    bullets.splice(b, 1);
+                }
+            }
+        }
+
+        // ============================================================
+        // SEKCJA: SYSTEM TRUDNOŚCI
+        // ============================================================
+
+        /**
+         * Stopniowo zwiększa trudność gry:
+         * - Zmniejsza odstęp między pojawianiem się wrogów (enemySpawnRate)
+         * - Minimum to 20 klatek (~3 wrogów na sekundę przy 60fps)
+         */
+        function updateDifficulty() {
+            difficultyTimer++;
+
+            if (difficultyTimer >= DIFFICULTY_INTERVAL && enemySpawnRate > 20) {
+                difficultyTimer = 0;
+                enemySpawnRate -= 4;   // co ~5 sekund wróg pojawia się o 4 klatki szybciej
+                if (enemySpawnRate < 20) enemySpawnRate = 20;  // dolny limit
+            }
+        }
+
+        // ============================================================
+        // SEKCJA: STRZELANIE (SPACJA)
+        // ============================================================
+
+        let shootCooldown = 0;            // licznik klatek od ostatniego strzału
+        const SHOOT_COOLDOWN_MAX = 15;    // minimalny odstęp między strzałami (w klatkach)
+
+        /**
+         * Obsługuje strzelanie – tworzy pocisk, jeśli spacja jest wciśnięta
+         * i minął już cooldown od poprzedniego strzału.
+         */
+        function handleShooting() {
+            if (shootCooldown > 0) {
+                shootCooldown--;
+            }
+
+            if (keys.Space && shootCooldown <= 0) {
+                spawnBullet();
+                shootCooldown = SHOOT_COOLDOWN_MAX;
+            }
+        }
+
+        // ============================================================
+        // SEKCJA: RYSOWANIE HUD (WYNIK, INSTRUKCJE)
+        // ============================================================
+
+        /**
+         * Rysuje wynik w lewym górnym rogu.
+         */
+        function drawHUD() {
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '18px "Courier New", monospace';
+            ctx.textAlign = 'left';
+            ctx.fillText('WYNIK: ' + score, 15, 30);
+
+            // Aktualny poziom trudności (opcjonalnie)
+            ctx.fillStyle = '#888888';
+            ctx.font = '12px "Courier New", monospace';
+            ctx.fillText('Poziom trudności: ' + Math.floor((60 - enemySpawnRate) / 4 + 1), 15, 50);
+        }
+
+        /**
+         * Rysuje ekran Game Over z wynikiem i instrukcją restartu.
+         */
+        function drawGameOver() {
+            // Półprzezroczysta nakładka
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Napis "GAME OVER"
+            ctx.fillStyle = '#ff3366';
+            ctx.font = 'bold 48px "Courier New", monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 40);
+
+            // Wynik końcowy
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '24px "Courier New", monospace';
+            ctx.fillText('Twój wynik: ' + score, canvas.width / 2, canvas.height / 2 + 20);
+
+            // Instrukcja restartu
+            ctx.fillStyle = '#00ccff';
+            ctx.font = '18px "Courier New", monospace';
+            ctx.fillText('Naciśnij [R] aby zagrać ponownie', canvas.width / 2, canvas.height / 2 + 60);
+        }
+
+        // ============================================================
+        // SEKCJA: RESTART GRY
+        // ============================================================
+
+        /**
+         * Resetuje wszystkie zmienne do wartości początkowych
+         * i uruchamia grę od nowa.
+         */
+        function restartGame() {
+            // Reset stanu gry
+            gameRunning = true;
+            score = 0;
+            difficultyTimer = 0;
+            enemySpawnRate = 60;
+            frameCount = 0;
+            shootCooldown = 0;
+
+            // Reset pozycji gracza
+            player.x = canvas.width / 2;
+
+            // Wyczyszczenie tablic
+            bullets = [];
+            enemies = [];
+
+            // Reset stanu klawiszy (na wypadek przytrzymanych podczas Game Over)
+            for (const key in keys) {
+                keys[key] = false;
+            }
+        }
+
+        // ============================================================
+        // GŁÓWNA PĘTLA GRY (GAME LOOP)
+        // ============================================================
+
+        /**
+         * Główna funkcja wywoływana co klatkę przez requestAnimationFrame.
+         * Odpowiada za aktualizację logiki i renderowanie wszystkich elementów.
+         */
+        function gameLoop() {
+            // --- Czyszczenie ekranu ---
+            // Rysujemy ciemne tło z delikatnymi „gwiazdami” (dla efektu kosmosu)
+            ctx.fillStyle = '#0a0a1a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Proste gwiazdy w tle (statyczne, rysowane co klatkę)
+            drawStars();
+
+            if (gameRunning) {
+                // --- Aktualizacja logiki gry ---
+                frameCount++;
+                updatePlayer();
+                handleShooting();
+                updateBullets();
+
+                // Spawn wrogów zgodnie z aktualnym spawn rate
+                if (frameCount % enemySpawnRate === 0) {
+                    spawnEnemy();
+                }
+
+                updateEnemies();              // może ustawić gameRunning = false
+                handleBulletEnemyCollisions();
+                updateDifficulty();
+
+                // --- Rysowanie wszystkich elementów ---
+                drawBullets();
+                drawEnemies();
+                drawPlayer();
+                drawHUD();
+            } else {
+                // --- Gra zakończona – rysujemy stan końcowy + Game Over ---
+                drawBullets();
+                drawEnemies();
+                drawPlayer();
+                drawHUD();
+                drawGameOver();
+            }
+
+            // Kontynuuj pętlę animacji
+            requestAnimationFrame(gameLoop);
+        }
+
+        /**
+         * Rysuje statyczne „gwiazdy” w tle – małe białe kropki.
+         * Pozycje są deterministyczne na podstawie canvas.width/height,
+         * aby uniknąć migotania.
+         */
+        function drawStars() {
+            ctx.fillStyle = '#ffffff';
+            // Używamy stałego rozkładu gwiazd (co 40px w poziomie i pionie,
+            // z lekkim losowym przesunięciem opartym na funkcji sinus dla efektu migotania)
+            for (let sx = 0; sx < canvas.width; sx += 35) {
+                for (let sy = 0; sy < canvas.height; sy += 40) {
+                    // Pseudolosowe migotanie na podstawie numeru klatki i pozycji
+                    const brightness = 0.3 + 0.7 * Math.abs(Math.sin((sx * sy + frameCount) * 0.001));
+                    if (brightness > 0.5) {
+                        ctx.globalAlpha = brightness;
+                        ctx.fillRect(sx + (sy % 17), sy + (sx % 13), 2, 2);
+                    }
+                }
+            }
+            ctx.globalAlpha = 1.0;
+        }
+
+        // ============================================================
+        // URUCHOMIENIE GRY
+        // ============================================================
+        console.log('🚀 Kosmiczna Strzelanka – gotowa do gry!');
+        console.log('Sterowanie: Strzałki Lewo/Prawo lub A/D, Spacja – strzał, R – restart');
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
