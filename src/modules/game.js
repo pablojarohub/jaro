@@ -84,9 +84,7 @@ const Game = (function () {
             }
 
             // Zapisujemy stan klawisza
-            if (e.code in keys) {
-                keys[e.code] = true;
-            }
+            keys[e.code] = true;
         });
 
         // Nasłuchiwanie na keyup – ustaw flagę na false
@@ -96,9 +94,7 @@ const Game = (function () {
                 e.preventDefault();
             }
 
-            if (e.code in keys) {
-                keys[e.code] = false;
-            }
+            keys[e.code] = false;
         });
     }
 
